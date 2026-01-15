@@ -20,24 +20,29 @@ services:
 
   # 新增的“安全岗亭”：唯一对外开放的入口
  # 新增的“安全岗亭”：唯一对外开放的入口
+ # 新增的“安全岗亭”
   oauth2-proxy:
     image: quay.io/oauth2-proxy/oauth2-proxy:latest
     ports:
       - "4180:4180"
-    # --- 关键改动 1: 显式指定读取根目录的 .env 文件 ---
-    env_file:
-      - .env
     environment:
-      # --- 关键改动 2: 保持变量名对齐 ---
       OAUTH2_PROXY_PROVIDER: "github"
-      # 注意：这里直接引用 .env 里的变量，不需要再加引号和 ${}
-      OAUTH2_PROXY_CLIENT_ID: ${GITHUB_CLIENT_ID}
-      OAUTH2_PROXY_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
-      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
-      OAUTH2_PROXY_UPSTREAMS: "http://frontend:3000"
+      # 👇 直接填入您的真实值，不留空格，也不要用 ${}
+      OAUTH2_PROXY_CLIENT_ID: "Ov23liTE9YmgNwykYGhm"
+      OAUTH2_PROXY_CLIENT_SECRET: "8cb126b4fb8c5c10302c7e289fd8114cf828a795"
+      OAUTH2_PROXY_COOKIE_SECRET: "12345678901234567890123456789012"
+      
+      # 必填：监听所有网络
       OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:4180"
+      
+      OAUTH2_PROXY_UPSTREAMS: "http://frontend:3000"
       OAUTH2_PROXY_REDIRECT_URL: "http://localhost:4180/oauth2/callback"
       OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_PASS_USER_HEADERS: "true"
+      # 设置 X-Auth-Request-Email 等 Header
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+      # (可选) 如果您希望后端能拿到 GitHub 的原始 Token
+      OAUTH2_PROXY_PASS_ACCESS_TOKEN: "true"
     depends_on:
       - frontend
       - backend
