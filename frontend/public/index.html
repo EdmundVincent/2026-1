@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ANA 整備Doc翻訳アプリ</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    <script>
+        // PDF.js 初期化設定（統一管理）
+        function initializePDFJS() {
+            if (typeof pdfjsLib !== 'undefined') {
+                // Worker設定
+                pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                
+                // CMap設定を無効化（CSP制限回避）
+                // 日本語フォントは埋め込みフォントで対応
+                pdfjsLib.GlobalWorkerOptions.cMapUrl = '';
+                pdfjsLib.GlobalWorkerOptions.cMapPacked = false;
+                
+                return true;
+            }
+            return false;
+        }
+        
+        // PDF.js読み込み直後に初期化を試行
+        if (!initializePDFJS()) {
+            // 読み込みが完了していない場合は、DOM読み込み後に再試行
+            document.addEventListener('DOMContentLoaded', initializePDFJS);
+        }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <!-- Header with User Info and Logout -->
+        <div class="header">
+            <h1>ANA 整備ドキュメント翻訳アプリ</h1>
+            <div class="user-info">
+                <span id="userWelcome" class="user-welcome">読み込み中...</span>
+                <button id="logoutButton" class="logout-button">ログアウト</button>
+            </div>
+        </div>
+        
+        <!-- PDF Upload Section -->
+        <div class="upload-section">
+            <div id="dropZone" class="drop-zone">
+                <p><strong>ファイルをここにドラッグ&ドロップ</strong></p>
+                <p>または下のボタンでファイルを選択</p>
+                <div class="upload-buttons">
+                    <input type="file" id="pdfInput" accept=".pdf" />
+                    <label for="pdfInput" class="upload-button">PDFをアップロード</label>
+                </div>
+            </div>
+            
+            <!-- File Status Section -->
+            <div id="fileStatus" class="file-status" style="display: none;">
+                <div class="file-info">
+                    <p><strong>読み込み済みファイル:</strong></p>
+                    <div id="pdfFileName" class="file-name">PDFファイル: 未選択</div>
+                    <div id="ocrProcessStatus" class="file-name">OCR処理: 待機中</div>
+                </div>
+                <button id="resetButton" class="reset-button">初期状態に戻る</button>
+            </div>
+        </div>
+
+        <!-- PDF Viewer Section -->
+        <div id="pdfViewer" class="pdf-viewer" style="display: none;">
+            <!-- Page Indicator -->
+            <div id="pageIndicator" class="page-indicator" style="display: none;">
+                <div class="indicator-label">ページ番号<br>(翻訳項目数)</div>
+                <div id="pageIndicatorItems" class="indicator-items"></div>
+                <div class="indicator-legend">
+                    <div class="legend-item">
+                        <div class="legend-color japanese"></div>
+                        <span>日本語あり</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color normal"></div>
+                        <span>日本語なし</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color current"></div>
+                        <span>現在のページ</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="controls">
+                <div class="page-controls">
+                    <button id="prevPage" disabled>前のページ</button>
+                    <span id="pageInfo">ページ 1 / 1</span>
+                    <button id="nextPage" disabled>次のページ</button>
+                </div>
+                <div class="zoom-controls">
+                    <button id="zoomOut">縮小 (-)</button>
+                    <span id="zoomLevel">100%</span>
+                    <button id="zoomIn">拡大 (+)</button>
+                    <button id="zoomReset">リセット</button>
+                </div>
+                <div class="download-controls">
+                    <button id="downloadPdf" class="download-button" disabled>翻訳済みPDFをダウンロード</button>
+                    <button id="downloadCsv" class="download-button" disabled>翻訳結果のダウンロード (CSV)</button>
+                    <div id="downloadProgress" class="download-progress">
+                        <div class="progress-text">PDF生成中...</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="main-container">
+                <!-- Left Panel: Original PDF -->
+                <div class="canvas-container left">
+                    <div class="panel-tab">
+                        <span class="tab-title">原本</span>
+                    </div>
+                    <div class="selection-controls">
+                        <button id="toggleAddTranslationButton" class="toggle-add-translation-button">追加モード</button>
+                        <button id="resetToDefaultButton" class="reset-default-button" disabled>デフォルト</button>
+                        <button id="addTranslationButton" class="add-translation-button" disabled>追加</button>
+                        <button id="joinTranslationButton" class="confirm-button" disabled>結合</button>
+                        <button id="cancelSelectionButton" class="cancel-selection-button" disabled>✗ 選択解除</button>
+                        <span id="selectionStatus" class="selection-status"></span>
+                    </div>
+                    <div class="canvas-wrapper">
+                        <canvas id="pdfCanvasLeft"></canvas>
+                        <div id="overlayLeft" class="ocr-overlay"></div>
+                    </div>
+                </div>
+                
+                <!-- Center Panel: Preview Canvas -->
+                <div class="canvas-container center">
+                    <div class="panel-tab">
+                        <span class="tab-title">出力イメージ</span>
+                    </div>
+                    <!-- Batch Selection Controls for Right Preview -->
+                    <div class="batch-controls">
+                        <button id="toggleDeleteTranslationButton" class="toggle-delete-button">削除モード</button>
+                        <button id="deleteAllBboxes" class="delete-all-button" disabled>全削除</button>
+                        <button id="deleteSelectedBboxes" class="delete-selected-button" disabled>削除</button>
+                        <button id="clearBatchSelection" class="clear-selection-button" disabled>✗ 選択解除</button>
+                        <span id="selectedCount" class="selected-count">選択: 0個</span>
+                    </div>
+                    <div class="canvas-wrapper">
+                        <canvas id="pdfCanvasRight"></canvas>
+                        <div id="overlayRight" class="ocr-overlay"></div>
+                    </div>
+                </div>
+                
+                <!-- Right Panel Container for vertical layout -->
+                <div class="right-panel-container">
+                    <!-- Translation Editing Panel -->
+                    <div id="translationPanel" class="translation-panel">
+                        <div class="panel-header">
+                            <h3>翻訳編集パネル</h3>
+                            <div class="panel-controls">
+                                <button id="togglePanel" class="toggle-button">−</button>
+                            </div>
+                        </div>
+                        
+                        <div class="panel-content">
+                            <!-- Confirmation Status Section -->
+                            <div class="panel-section">
+                                <div class="confirmation-status">
+                                    <span id="confirmationStatusText" class="status-text unconfirmed">未確認</span>
+                                    <button id="toggleConfirmationButton" class="toggle-confirmation-button">確認完了</button>
+                                </div>
+                            </div>
+
+                            <!-- OCR Text Section -->
+                            <div class="panel-section">
+                                <label for="ocrText" class="section-label">OCR結果テキスト</label>
+                                <div class="text-input-with-button">
+                                    <textarea id="ocrText" class="text-input" placeholder="日本語テキストが表示されます..."></textarea>
+                                    <div class="normalize-controls">
+                                        <button id="normalizeButton" class="normalize-button" data-tooltip="前処理">📖</button>
+                                        <button id="editNormalizePromptButton" class="edit-normalize-prompt-button" data-tooltip="プロンプト編集">📝</button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Target Japanese Text Section -->
+                            <div class="panel-section">
+                                <label for="targetText" class="section-label">翻訳対象テキスト</label>
+                                <div class="text-input-with-button">
+                                    <textarea id="targetText" class="text-input" placeholder="翻訳対象テキストが表示されます..."></textarea>
+                                    <div class="retranslate-controls">
+                                        <button id="retranslateButton" class="retranslate-button" data-tooltip="再翻訳">🔄</button>
+                                        <button id="editPromptButton" class="edit-prompt-button" data-tooltip="プロンプト編集">📝</button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Output Text Section -->
+                            <div class="panel-section">
+                                <div class="section-header">
+                                    <label for="outputText" class="section-label">出力テキスト</label>
+                                </div>
+                                <textarea id="outputText" class="text-input" placeholder="プレビューに表示されるテキストが表示されます..."></textarea>
+                                
+                                <div class="text-options">
+                                    <label class="wrap-option">
+                                        <input type="checkbox" id="textWrapToggle" />
+                                        <span>折り返し</span>
+                                    </label>
+                                    <div class="font-size-control">
+                                        <label for="fontSizeInput" class="font-size-label">文字サイズ:</label>
+                                        <button type="button" id="fontSizeDecrease" class="font-size-button">−</button>
+                                        <input type="number" id="fontSizeInput" min="1" max="24" value="12" class="font-size-input" />
+                                        <button type="button" id="fontSizeIncrease" class="font-size-button">+</button>
+                                        <span class="font-size-unit">px</span>
+                                    </div>
+                                <!-- Width Control Section -->
+                                    <div class="width-control">
+                                        <label class="width-label">幅調整:</label>
+                                        <button type="button" id="widthDecrease" class="width-button" title="幅を狭くする">−</button>
+                                        <input type="text" id="widthInput" min="50" max="300" step="1" value="100" class="width-input" title="幅を直接入力（50-300%）" tabindex="0" />
+                                        <span class="width-unit">%</span>
+                                        <button type="button" id="widthIncrease" class="width-button" title="幅を広くする">+</button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- AI Translation Result Section -->
+                            <div class="panel-section">
+                                <label for="aiTranslationResult" class="section-label">AI翻訳結果</label>
+                                <div class="ai-translation-container">
+                                    <textarea id="aiTranslationResult" class="text-input" readonly placeholder="AI翻訳結果が表示されます..."></textarea>
+                                    <button id="applyAiTranslationButton" class="apply-ai-translation-overlay-button" disabled title="AI翻訳結果を出力テキストに反映">反映</button>
+                                </div>
+                            </div>
+                            
+                            <!-- RAG Samples Section -->
+                            <div class="panel-section rag-section">
+                                <label class="section-label">類似サンプル</label>
+                                <div id="ragSamplesList" class="rag-samples-list">
+                                    <div class="no-samples-message">
+                                        OCRボックスを選択してください
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Sample Panel -->
+                    <div id="samplePanel" class="translation-panel">
+                        <div class="panel-header">
+                            <h3>描画オプション</h3>
+                            <div class="panel-controls">
+                                <button id="toggleSamplePanel" class="toggle-button">−</button>
+                            </div>
+                        </div>
+                        
+                        <div class="panel-content">
+                            
+                            <!-- Stamp Drawing Section -->
+                            <div class="panel-section">
+                                <div class="stamp-controls">
+                                    <button id="stampModeButton" class="stamp-button">📌 Stamp追加</button>
+                                    <button id="clearStampsButton" class="clear-stamps-button" disabled>🗑️ スタンプクリア</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Prompt Edit Modal -->
+    <div id="promptEditModal" class="prompt-modal" style="display: none;">
+        <div class="prompt-modal-content">
+            <div class="prompt-modal-header">
+                <h3>翻訳プロンプト編集</h3>
+                <button id="closePromptModal" class="prompt-modal-close">&times;</button>
+            </div>
+            <div class="prompt-modal-body">
+                <div class="prompt-info">
+                    <p><strong>注意:</strong> このプロンプトはAI翻訳時に使用されます。変更は次回の翻訳から反映されます。</p>
+                </div>
+                <textarea id="promptTextArea" class="prompt-text-area" placeholder="翻訳プロンプトを入力してください..."></textarea>
+            </div>
+            <div class="prompt-modal-footer">
+                <button id="resetPromptButton" class="prompt-reset-button">デフォルトに戻す</button>
+                <button id="savePromptButton" class="prompt-save-button">保存</button>
+                <button id="cancelPromptButton" class="prompt-cancel-button">キャンセル</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Normalize Prompt Edit Modal -->
+    <div id="normalizePromptEditModal" class="prompt-modal" style="display: none;">
+        <div class="prompt-modal-content">
+            <div class="prompt-modal-header">
+                <h3>正規化プロンプト編集</h3>
+                <button id="closeNormalizePromptModal" class="prompt-modal-close">&times;</button>
+            </div>
+            <div class="prompt-modal-body">
+                <div class="prompt-info">
+                    <p><strong>注意:</strong> このプロンプトはテキスト正規化時に使用されます。カタカナをひらがな・漢字に変換し、英語はそのまま保持します。</p>
+                </div>
+                <textarea id="normalizePromptTextArea" class="prompt-text-area" placeholder="正規化プロンプトを入力してください..."></textarea>
+            </div>
+            <div class="prompt-modal-footer">
+                <button id="resetNormalizePromptButton" class="prompt-reset-button">デフォルトに戻す</button>
+                <button id="saveNormalizePromptButton" class="prompt-save-button">保存</button>
+                <button id="cancelNormalizePromptButton" class="prompt-cancel-button">キャンセル</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Backend Configuration Script -->
+    <script>
+        // バックエンドURLを動的に設定
+        window.BACKEND_URL = window.location.protocol === 'https:' 
+            ? 'BACKEND_URL_PLACEHOLDER'  // 本番環境では置換される
+            : 'http://localhost:8000';   // 開発環境
+    </script>
+    
+    <script src="js/config-frontend.js"></script>
+    <script src="src/config.js"></script>
+    <script src="src/utils/auth.js"></script>
+    <script type="module" src="main.js"></script>
+    
+</body>
+</html>
