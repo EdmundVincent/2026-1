@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # [新增] 数据库服务 (PostgreSQL)
+  # 1. 数据库服务 (PostgreSQL) - 保持不变，用于业务数据
   db:
     image: postgres:15
     restart: always
@@ -12,37 +12,52 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432" # 开发模式暴露端口，方便调试
+      - "5432:5432"
 
-  # [修改] 后端服务
+  # 2. 后端服务 - 关键修改
   backend:
     build: ./backend
+    container_name: ana-backend # 建议加个名字，方便查看日志
     ports:
       - "8000:8000"
     environment:
-      # 告诉后端数据库在哪里 (host: db)
+      # ---原有配置---
       DATABASE_URL: postgresql://ana_user:secure_password_123@db:5432/ana_db
-      # 前端地址
       FRONTEND_URL: "http://localhost:3000"
-      # JWT 密钥 (随便写一个复杂的)
       SECRET_KEY: "change_this_to_a_very_long_random_secret_string"
+      
+      # ---贾维斯新增配置 (给 IDP 用)---
+      # 指定 IDP 数据库在容器内的存放位置
+      IDP_DB_PATH: /app/data/idp.db
+      
     depends_on:
       - db
     volumes:
       - ./backend:/app
+      # [新增] 挂载一个数据卷，确保 SQLite 文件(idp.db)重启后不丢失
+      # 也就是把容器里的 /app/data 映射到主机当前目录下的 backend_data 文件夹
+      - ./backend_data:/app/data 
 
-  # [修改] 前端服务
+  # 3. 前端服务 - 关键修改
   frontend:
     build: ./frontend
+    container_name: ana-frontend
     ports:
       - "3000:3000"
     environment:
-      # 在 Docker 内部构建时可能需要，但也需要在浏览器运行时生效
+      # ---原有配置---
       - REACT_APP_API_URL=http://localhost:8000/api
-      - CHOKIDAR_USEPOLLING=true # Windows下Docker的热重载补丁
+      - CHOKIDAR_USEPOLLING=true
+      
+      # ---贾维斯新增配置 (给 server.js 代理用)---
+      # 告诉 Node 服务器，后端在 Docker 网络内部的地址是 http://backend:8000
+      - BACKEND_URL=http://backend:8000
+      
     volumes:
       - ./frontend:/app
       - /app/node_modules
+    depends_on:
+      - backend
 
 volumes:
   postgres_data:

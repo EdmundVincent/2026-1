@@ -1,122 +1,173 @@
+/**
+ * Internal IDP Authentication Manager
+ * 适配 idp.py 的 OAuth2 流程
+ */
 class AuthManager {
     constructor() {
         this.userInfo = null;
-        this.backendUrl = window.BACKEND_URL || 'http://localhost:8000';
-        this.clientId = 'demo-app';
-        this.clientSecret = 'demo-secret';
-        this.redirectUri = `${window.location.origin}/callback`;
-        this.stateKey = 'oauth_state';
-        this.tokenKey = 'internal_access_token';
+        this.token = localStorage.getItem('access_token');
+        // 配置项：必须与数据库(clients表)里的设置一致
+        this.config = {
+            clientId: "frontend-app", 
+            authUrl: "/oauth/authorize",
+            tokenUrl: "/oauth/token",
+            userInfoUrl: "/oauth/userinfo"
+        };
+        
+        // 启动时自动检查状态
         this.initializeAuth();
     }
+
+    /**
+     * 初始化认证状态
+     */
     async initializeAuth() {
-        const token = this.getToken();
-        const code = this.getCodeFromUrl();
+        // 1. 检查 URL 是否包含回调的 Code
+        const urlParams = new URLSearchParams(window.location.search);
+        const code = urlParams.get('code');
+
         if (code) {
-            await this.exchangeCodeForToken(code);
-            this.clearCodeFromUrl();
+            // 如果有 code，说明刚从登录页跳回来，去换 Token
+            await this.handleCallback(code);
+        } else if (this.token) {
+            // 如果本地有 token，尝试获取用户信息验证有效性
+            await this.fetchUserInfo();
+        } else {
+            // 既没 token 也没 code，执行登录跳转
+            console.log("未登录，跳转至登录页...");
+            this.login();
         }
-        const ok = await this.fetchUserInfoWithToken();
-        if (ok) {
-            this.setupLogoutButton();
-            return;
-        }
-        await this.loginFlow();
     }
-    getToken() {
-        try { return localStorage.getItem(this.tokenKey) || null; } catch { return null; }
-    }
-    setToken(token) {
-        try { localStorage.setItem(this.tokenKey, token); } catch {}
-    }
-    getCodeFromUrl() {
-        const params = new URLSearchParams(window.location.search);
-        return params.get('code');
-    }
-    clearCodeFromUrl() {
-        const url = new URL(window.location.href);
-        url.searchParams.delete('code');
-        url.searchParams.delete('state');
-        window.history.replaceState({}, document.title, url.toString());
-    }
-    async exchangeCodeForToken(code) {
-        const form = new URLSearchParams();
-        form.set('grant_type', 'authorization_code');
-        form.set('code', code);
-        form.set('client_id', this.clientId);
-        form.set('client_secret', this.clientSecret);
-        form.set('redirect_uri', this.redirectUri);
-        const resp = await fetch(`${this.backendUrl}/oauth/token`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: form.toString()
+
+    /**
+     * 登录：跳转到后端 /oauth/authorize
+     */
+    login() {
+        // 生成随机 state 防止 CSRF (简化版)
+        const state = Math.random().toString(36).substring(7);
+        localStorage.setItem('oauth_state', state);
+
+        const params = new URLSearchParams({
+            client_id: this.config.clientId,
+            redirect_uri: window.location.origin, // 回调到当前首页
+            response_type: "code",
+            state: state
         });
-        if (!resp.ok) { this.showErrorMessage('トークン取得に失敗しました'); return false; }
-        const data = await resp.json();
-        if (data && data.access_token) {
-            this.setToken(data.access_token);
-            return true;
-        }
-        return false;
+
+        // 这里的路径会经过 server.js 的代理转发到 backend/idp.py
+        window.location.href = `${this.config.authUrl}?${params.toString()}`;
     }
-    async fetchUserInfoWithToken() {
-        const token = this.getToken();
-        if (!token) return false;
-        const resp = await fetch(`${this.backendUrl}/api/me`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (!resp.ok) return false;
-        const data = await resp.json();
-        this.userInfo = { name: data.name || null, email: data.email || null };
-        this.displayUserInfo();
-        this.setupLogoutButton();
-        return true;
-    }
-    async loginFlow() {
-        const username = window.prompt('ユーザー名を入力してください');
-        const password = window.prompt('パスワードを入力してください');
-        if (!username || !password) { this.showErrorMessage('ログインが必要です'); return; }
-        const resp = await fetch(`${this.backendUrl}/idp/login`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username, password }),
-            credentials: 'include'
-        });
-        if (!resp.ok) { this.showErrorMessage('ログインに失敗しました'); return; }
-        const state = Math.random().toString(36).slice(2);
-        try { localStorage.setItem(this.stateKey, state); } catch {}
-        const authUrl = `${this.backendUrl}/oauth/authorize?client_id=${encodeURIComponent(this.clientId)}&redirect_uri=${encodeURIComponent(this.redirectUri)}&response_type=code&state=${encodeURIComponent(state)}`;
-        window.location.href = authUrl;
-    }
-    displayUserInfo() {
-        const el = document.getElementById('userWelcome');
-        if (el && this.userInfo) {
-            const name = this.userInfo.name || this.userInfo.email || 'ユーザー';
-            el.textContent = `ユーザ名: ${name}`;
-        }
-    }
-    setupLogoutButton() {
-        const logoutButton = document.getElementById('logoutButton');
-        if (logoutButton) {
-            logoutButton.addEventListener('click', () => {
-                this.logout();
+
+    /**
+     * 处理回调：Code 换 Token
+     */
+    async handleCallback(code) {
+        // 清除 URL 里的 code，看着干净点
+        window.history.replaceState({}, document.title, window.location.pathname);
+
+        try {
+            const formData = new URLSearchParams();
+            formData.append('grant_type', 'authorization_code');
+            formData.append('code', code);
+            formData.append('client_id', this.config.clientId);
+            formData.append('client_secret', 'frontend-secret'); 
+            formData.append('redirect_uri', window.location.origin);
+
+            const response = await fetch(this.config.tokenUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: formData
             });
+
+            if (!response.ok) throw new Error('Token exchange failed');
+
+            const data = await response.json();
+            if (data.access_token) {
+                this.token = data.access_token;
+                localStorage.setItem('access_token', this.token);
+                await this.fetchUserInfo(); // 拿到 Token 后立即拉取用户信息
+            }
+        } catch (error) {
+            console.error('登录回调处理失败:', error);
+            alert('登录失败，请重试');
+            this.login(); // 失败后重试登录
         }
     }
+
+    /**
+     * 用 Token 获取用户信息
+     */
+    async fetchUserInfo() {
+        if (!this.token) return;
+
+        try {
+            const response = await fetch(this.config.userInfoUrl, {
+                headers: { 'Authorization': `Bearer ${this.token}` }
+            });
+
+            if (response.ok) {
+                this.userInfo = await response.json();
+                this.displayUserInfo();
+            } else {
+                // Token 可能过期了，清除并重新登录
+                this.logout(); 
+            }
+        } catch (error) {
+            console.error('获取用户信息失败:', error);
+            this.logout();
+        }
+    }
+
+    /**
+     * 登出
+     */
     logout() {
-        try { localStorage.removeItem(this.tokenKey); } catch {}
-        alert('ログアウトしました');
-        window.location.reload();
+        this.token = null;
+        this.userInfo = null;
+        localStorage.removeItem('access_token');
+        this.displayUserInfo();
+        this.login(); // 登出后直接跳回登录页
     }
-    showErrorMessage(message) {
-        const el = document.getElementById('userWelcome');
-        if (el) {
-            el.textContent = message;
-            el.style.color = '#dc3545';
+
+    /**
+     * 界面更新逻辑
+     */
+    displayUserInfo() {
+        const userWelcomeElement = document.getElementById('userWelcome');
+        const logoutButton = document.getElementById('logoutButton');
+        const loginButton = document.getElementById('loginButton'); 
+
+        if (this.userInfo) {
+            // 已登录
+            if (userWelcomeElement) {
+                userWelcomeElement.textContent = `你好, ${this.userInfo.name || this.userInfo.sub}`;
+                userWelcomeElement.style.display = 'block';
+            }
+            if (logoutButton) {
+                logoutButton.style.display = 'block';
+                // 重新绑定登出事件
+                logoutButton.onclick = (e) => {
+                    e.preventDefault();
+                    this.logout();
+                };
+            }
+            if (loginButton) loginButton.style.display = 'none';
+        } else {
+            // 未登录
+            if (userWelcomeElement) userWelcomeElement.textContent = '';
+            if (logoutButton) logoutButton.style.display = 'none';
         }
     }
+
+    // 给其他模块调用的接口
     getCurrentUser() {
         return this.userInfo;
     }
+    
+    getAccessToken() {
+        return this.token;
+    }
 }
+
+// 初始化
 window.authManager = new AuthManager();

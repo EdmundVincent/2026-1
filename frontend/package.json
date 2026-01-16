@@ -9,8 +9,9 @@
     "start:linux": "NODE_ENV=production node server.js",
     "health": "curl -f http://localhost:$PORT/health || exit 1"
   },
-  "dependencies": {
+"dependencies": {
     "express": "^4.19.2",
+    "http-proxy-middleware": "^2.0.6", 
     "express-rate-limit": "^7.4.0",
     "helmet": "^7.1.0",
     "cors": "^2.8.5",
