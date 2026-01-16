@@ -11,8 +11,7 @@ export class Llm {
   async requestTranslation(prompt, targetText='') {
     const backendUrl = this.getBackendUrl();
     
-    // 🛠️ 修复点：直接调用 authManager 的方法
-    // 不再手动读取 localStorage，也不用担心 key 名字写错
+    // 👇 修复：使用 window.authManager.fetchWithAuth 发送请求
     try {
         const resp = await window.authManager.fetchWithAuth(`${backendUrl}/api/translate`, { 
             method: 'POST', 

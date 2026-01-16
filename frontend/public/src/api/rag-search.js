@@ -1,29 +1,6 @@
 /**
  * RagSearch - RAG検索APIクライアントクラス
- * 
- * Python バックエンド経由でベクターデータベースに対する
- * 類似度検索（Retrieval-Augmented Generation）を実行する。
- * 文書データベースから関連コンテンツを取得し、翻訳精度向上に貢献する。
- * 
- * 主要機能:
- * - ベクター類似度検索
- * - 関連文書取得
- * - JSON形式でのデータ交換
- * - バックエンドAPI統合
- * - エラーハンドリング
- * - 設定可能な検索パラメータ
- * 
- * API エンドポイント:
- * - POST /api/rag: RAG検索リクエスト処理
- * 
- * 検索フロー:
- * 1. 入力テキストの埋め込みベクター生成
- * 2. ベクターデータベース類似度検索
- * 3. 関連度スコア算出・フィルタリング
- * 4. 関連文書メタデータ取得
- * 5. 構造化されたJSON応答返却
  */
-// Python API 経由に差し替え
 export class RagSearch {
   constructor(options={}){ this.globalState = options.globalState; }
   
@@ -33,11 +10,19 @@ export class RagSearch {
   
   async performRAGSearch(text){
     const backendUrl = this.getBackendUrl();
-    const token = localStorage.getItem('internal_access_token');
-    const headers = { 'Content-Type':'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    const resp = await fetch(`${backendUrl}/api/rag`, { method:'POST', headers, body: JSON.stringify({ text })});
-    if (!resp.ok) return null;
-    return await resp.json();
+    
+    // 👇 修复：使用 window.authManager.fetchWithAuth 发送请求
+    try {
+        const resp = await window.authManager.fetchWithAuth(`${backendUrl}/api/rag`, {
+            method: 'POST', 
+            body: JSON.stringify({ text })
+        });
+
+        if (!resp.ok) return null;
+        return await resp.json();
+    } catch (e) {
+        console.error("RAG search failed:", e);
+        return null;
+    }
   }
 }

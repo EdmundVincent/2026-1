@@ -1,24 +1,5 @@
-"""
-APIルーター
-===========
-
-フロントエンドからのHTTPリクエストを処理するFastAPIルーター。
-主要機能：翻訳、OCR、RAG検索、ファイル管理
-
-エンドポイント一覧：
-- /translate: 単一テキスト翻訳
-- /translate_batch: バッチ翻訳（複数テキスト一括処理）
-- /rag: RAG検索
-- /normalize: テキスト正規化
-- /ocr: PDF OCR処理
-- /config: フロントエンド用設定取得
-- /my-files: アップロードファイル履歴
-- /cleanup-old-files: 古いファイル削除
-"""
-
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Header
 from pydantic import BaseModel
-from .idp import get_authorized_user # 👈 1. 导入刚才写的守门人
 from typing import Optional, List, Dict, Any
 from app.services.llm import OptimizedLLMService
 from app.services.rag import OptimizedRAGService
@@ -27,10 +8,12 @@ from app.services.dx_suite_ocr import DXSuiteOCRService
 from app.services.blob_cache import BlobCacheService
 from app.services.config import config
 import logging
-from app.routes.idp import verify_jwt
+# 👇 1. 引入守门人
+from app.routes.idp import verify_jwt, get_authorized_user 
 
 logger = logging.getLogger(__name__)
 
+# 👇 2. 关键修改：加上 dependencies，给所有接口上锁！
 router = APIRouter(dependencies=[Depends(get_authorized_user)])
 
 # Pydanticモデル定義（リクエスト・レスポンスの型定義）
@@ -93,14 +76,8 @@ async def get_frontend_config():
     return ConfigResponse(frontend_config=frontend_config)
 
 @router.get("/me")
-async def me(authorization: str = Header(None)):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="missing token")
-    token = authorization.split(" ", 1)[1]
-    payload = verify_jwt(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="invalid token")
-    return {"sub": payload.get("sub"), "email": payload.get("email"), "name": payload.get("name")}
+async def me(user: dict = Depends(get_authorized_user)):
+    return {"sub": user.get("sub"), "email": user.get("email"), "name": user.get("name")}
 
 @router.post("/translate", response_model=TranslateResponse)
 async def translate(req: TranslateRequest):

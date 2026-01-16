@@ -67,7 +67,6 @@ class AuthManager {
 
     async fetchUserInfo() {
         try {
-            // 这里复用 fetchWithAuth 也可以，但为了避免循环调用，先保持原样
             const res = await fetch(this.config.userInfoUrl, {
                 headers: { 'Authorization': `Bearer ${this.token}` }
             });
@@ -94,10 +93,7 @@ class AuthManager {
         }
     }
 
-    /**
-     * 🔐 核心修复：统一发请求的方法
-     * 自动加 Token，自动处理 Token 名称，自动处理过期
-     */
+    // 👇 关键：添加这个通用请求方法
     async fetchWithAuth(url, options = {}) {
         const headers = {
             'Content-Type': 'application/json',
