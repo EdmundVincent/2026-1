@@ -13,7 +13,8 @@ import urllib.parse
 router = APIRouter()
 
 DB_PATH = os.environ.get("IDP_DB_PATH", os.path.join(os.path.dirname(__file__), "..", "idp.db"))
-SECRET = os.environ.get("INTERNAL_JWT_SECRET", "change_this")
+# 优先读取 docker-compose 里的 SECRET_KEY
+SECRET = os.environ.get("SECRET_KEY") or os.environ.get("INTERNAL_JWT_SECRET") or "change_this"
 SESSION_TTL = 3600
 CODE_TTL = 300
 TOKEN_TTL = 1800
@@ -62,13 +63,14 @@ def verify_jwt(token: str):
         return payload
     except: return None
 
-# --- 登录页面 (GET) ---
+# --- 1. 登录页面 (GET) ---
 @router.get("/idp/login", response_class=HTMLResponse)
 def login_page(next: str | None = "/"):
     return f"""
     <html>
         <head>
             <title>ANA Login</title>
+            <meta charset="utf-8">
             <style>
                 body {{ display:flex; justify-content:center; align-items:center; height:100vh; background:#f0f2f5; font-family:sans-serif; }}
                 .card {{ background:white; padding:2rem; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.1); width:300px; }}
@@ -76,7 +78,7 @@ def login_page(next: str | None = "/"):
                 input {{ width:100%; padding:10px; margin:10px 0; border:1px solid #ccc; border-radius:4px; box-sizing:border-box; }}
                 button {{ width:100%; padding:10px; background:#0078d4; color:white; border:none; border-radius:4px; cursor:pointer; font-weight:bold; }}
                 button:hover {{ background:#005a9e; }}
-                .error {{ color: red; text-align: center; margin-bottom: 10px; font-size: 0.9em; }}
+                .footer {{ margin-top: 15px; font-size: 12px; color: #666; text-align: center; }}
             </style>
         </head>
         <body>
@@ -87,12 +89,13 @@ def login_page(next: str | None = "/"):
                     <input type="password" name="password" required placeholder="Password">
                     <button type="submit">Sign In</button>
                 </form>
+                <div class="footer">Default: admin / password</div>
             </div>
         </body>
     </html>
     """
 
-# --- 处理登录 (POST Form) ---
+# --- 2. 处理登录 (POST Form) [修复核心] ---
 @router.post("/idp/login")
 def idp_login(response: Response, username: str = Form(...), password: str = Form(...), next: str | None = Query("/")):
     conn = connect()
@@ -100,7 +103,6 @@ def idp_login(response: Response, username: str = Form(...), password: str = For
     cur.execute("select id, password_hash from users where username=?", (username,))
     row = cur.fetchone()
     
-    # 验证失败返回 HTML 错误页
     if not row or row["password_hash"] != hash_password(password):
         conn.close()
         return HTMLResponse(f"""
@@ -119,8 +121,20 @@ def idp_login(response: Response, username: str = Form(...), password: str = For
     conn.commit()
     conn.close()
     
-    response.set_cookie("session_id", sid, httponly=True, max_age=SESSION_TTL)
-    return RedirectResponse(url=next, status_code=302)
+    # ---------------------------------------------------------
+    # 🛑 关键修复：直接在跳转响应对象上贴 Cookie
+    # ---------------------------------------------------------
+    
+    # 智能修正 next URL：如果它是 Docker 内部地址 (http://backend:8000)，修正为相对路径
+    # 这样浏览器就不会尝试去连 backend:8000 导致报错
+    redirect_url = next
+    if "backend:8000" in redirect_url:
+         parsed = urllib.parse.urlparse(redirect_url)
+         redirect_url = parsed.path + ("?" + parsed.query if parsed.query else "")
+
+    redirect_resp = RedirectResponse(url=redirect_url, status_code=302)
+    redirect_resp.set_cookie(key="session_id", value=sid, httponly=True, max_age=SESSION_TTL)
+    return redirect_resp
 
 def get_current_user(request: Request):
     sid = request.cookies.get("session_id")
@@ -137,7 +151,7 @@ def get_current_user(request: Request):
     conn.close()
     return u
 
-# --- OAuth Authorize ---
+# --- 3. OAuth Authorize ---
 @router.get("/oauth/authorize")
 def oauth_authorize(request: Request, client_id: str, redirect_uri: str, response_type: str = "code", state: str | None = None):
     user = get_current_user(request)
@@ -167,6 +181,7 @@ def oauth_token(grant_type: str = Form(...), code: str = Form(...), client_id: s
     cur = conn.cursor()
     cur.execute("select * from auth_codes where code=?", (code,))
     auth_code = cur.fetchone()
+    
     if not auth_code or auth_code["client_id"] != client_id:
         conn.close()
         raise HTTPException(400, "Invalid code")
@@ -183,40 +198,61 @@ def oauth_token(grant_type: str = Form(...), code: str = Form(...), client_id: s
 
 @router.get("/oauth/userinfo")
 def userinfo(authorization: str = Header(...)):
+    if not authorization.startswith("Bearer "): raise HTTPException(401)
     token = authorization.split(" ")[1]
     payload = verify_jwt(token)
     if not payload: raise HTTPException(401)
     return payload
 
-# --- 贾维斯特别修正：强力数据预埋 ---
+# --- 数据预埋 ---
 def seed():
     conn = connect()
     cur = conn.cursor()
-    print("[IDP Init] Checking Seed Data...")
-
-    # 1. 确保 Client 存在
+    # Client
     cur.execute("select * from clients where client_id='frontend-app'")
     if not cur.fetchone():
-        print("[IDP Init] Creating Client: frontend-app")
+        print("[IDP] Seeding Client...")
         cur.execute("insert into clients(client_id, client_secret, redirect_uri) values(?,?,?)", ("frontend-app", "frontend-secret", "http://localhost:3000"))
     
-    # 2. 确保 Admin 存在 (并且强制更新密码!)
+    # User (强制更新密码)
     TARGET_USER = "admin"
     TARGET_PASS = "password"
     NEW_HASH = hash_password(TARGET_PASS)
     
     cur.execute("select id from users where username=?", (TARGET_USER,))
-    row = cur.fetchone()
-    
-    if not row:
-        print(f"[IDP Init] Creating User: {TARGET_USER}")
+    if not cur.fetchone():
+        print("[IDP] Seeding Admin User...")
         cur.execute("insert into users(username, password_hash, email, name, created_at) values(?,?,?,?,?)", (TARGET_USER, NEW_HASH, "admin@test.com", "Admin User", int(time.time())))
     else:
-        # 关键修正：如果用户已存在，强制更新密码哈希，防止死锁
-        print(f"[IDP Init] Updating Password for User: {TARGET_USER}")
         cur.execute("update users set password_hash=? where username=?", (NEW_HASH, TARGET_USER))
         
     conn.commit()
     conn.close()
 
 seed()
+
+# 作用：保护 /api/ 下的业务接口，只有带有效 Token 的请求才能通过
+# --------------------------------------------------------------------------
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+
+# 定义：Token 去哪里找？(告诉 Swagger UI 去 /oauth/token 拿)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/oauth/token")
+
+async def get_authorized_user(token: str = Depends(oauth2_scheme)):
+    """
+    依赖注入函数：
+    1. 自动从 Header 中提取 Authorization: Bearer <token>
+    2. 验证 Token 签名和有效期
+    3. 返回用户信息
+    """
+    payload = verify_jwt(token)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return payload
+
+    

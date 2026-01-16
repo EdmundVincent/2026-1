@@ -18,6 +18,7 @@ APIルーター
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Header
 from pydantic import BaseModel
+from .idp import get_authorized_user # 👈 1. 导入刚才写的守门人
 from typing import Optional, List, Dict, Any
 from app.services.llm import OptimizedLLMService
 from app.services.rag import OptimizedRAGService
@@ -30,7 +31,7 @@ from app.routes.idp import verify_jwt
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_authorized_user)])
 
 # Pydanticモデル定義（リクエスト・レスポンスの型定義）
 
