@@ -4,7 +4,7 @@ class AuthManager {
         this.token = localStorage.getItem('access_token');
         this.config = {
             clientId: "frontend-app",
-            authUrl: "/oauth/authorize", // 经由 server.js 代理
+            authUrl: "/oauth/authorize",
             tokenUrl: "/oauth/token",
             userInfoUrl: "/oauth/userinfo"
         };
@@ -26,7 +26,6 @@ class AuthManager {
     }
 
     login() {
-        // 直接跳转，不弹窗
         const params = new URLSearchParams({
             client_id: this.config.clientId,
             redirect_uri: window.location.origin,
@@ -68,6 +67,7 @@ class AuthManager {
 
     async fetchUserInfo() {
         try {
+            // 这里复用 fetchWithAuth 也可以，但为了避免循环调用，先保持原样
             const res = await fetch(this.config.userInfoUrl, {
                 headers: { 'Authorization': `Bearer ${this.token}` }
             });
@@ -90,8 +90,33 @@ class AuthManager {
         const el = document.getElementById('userWelcome');
         if (el && this.userInfo) {
             el.textContent = `User: ${this.userInfo.name}`;
-            el.style.color = 'black'; // 确保不是红色的报错颜色
+            el.style.color = 'black';
         }
+    }
+
+    /**
+     * 🔐 核心修复：统一发请求的方法
+     * 自动加 Token，自动处理 Token 名称，自动处理过期
+     */
+    async fetchWithAuth(url, options = {}) {
+        const headers = {
+            'Content-Type': 'application/json',
+            ...options.headers,
+        };
+
+        if (this.token) {
+            headers['Authorization'] = `Bearer ${this.token}`;
+        }
+
+        const response = await fetch(url, { ...options, headers });
+
+        if (response.status === 401) {
+            console.warn("Token 过期，正在登出...");
+            this.logout();
+            throw new Error("Session expired");
+        }
+
+        return response;
     }
 }
 window.authManager = new AuthManager();

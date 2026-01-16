@@ -1,26 +1,6 @@
 /**
  * Llm - 大規模言語モデル API クライアントクラス
- * 
- * Python バックエンド経由でOpenAI GPTなどの大規模言語モデルと通信し、
- * 高品質な翻訳サービスを提供する。フロントエンドからの翻訳リクエストを
- * バックエンドAPIに中継し、安全で効率的なLLM活用を実現する。
- * 
- * 主要機能:
- * - バックエンドAPI経由のLLM呼び出し
- * - プロンプトエンジニアリング対応
- * - エラーハンドリング・リトライ機能
- * - APIレスポンス正規化
- * - 設定可能なバックエンドURL
- * - JSON形式でのデータ交換
- * 
- * API エンドポイント:
- * - POST /api/translate: 翻訳リクエスト処理
- * 
- * セキュリティ:
- * - APIキーはバックエンドで管理
- * - フロントエンドには機密情報を含めない
  */
-// Python API 経由に差し替え
 export class Llm {
   constructor(options={}){ this.globalState = options.globalState; }
   
@@ -30,12 +10,21 @@ export class Llm {
   
   async requestTranslation(prompt, targetText='') {
     const backendUrl = this.getBackendUrl();
-    const token = localStorage.getItem('internal_access_token');
-    const headers = { 'Content-Type':'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    const resp = await fetch(`${backendUrl}/api/translate`, { method:'POST', headers, body: JSON.stringify({ text: targetText, prompt }) });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-  return data.translation || null;
+    
+    // 🛠️ 修复点：直接调用 authManager 的方法
+    // 不再手动读取 localStorage，也不用担心 key 名字写错
+    try {
+        const resp = await window.authManager.fetchWithAuth(`${backendUrl}/api/translate`, { 
+            method: 'POST', 
+            body: JSON.stringify({ text: targetText, prompt }) 
+        });
+        
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        return data.translation || null;
+    } catch (e) {
+        console.error("Translation request failed:", e);
+        return null;
+    }
   }
 }
