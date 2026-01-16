@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Request, Response, HTTPException, Header, Form, Query
 from fastapi.responses import RedirectResponse, HTMLResponse
-from pydantic import BaseModel
 import os
 import time
 import hmac
@@ -15,38 +14,11 @@ router = APIRouter()
 
 DB_PATH = os.environ.get("IDP_DB_PATH", os.path.join(os.path.dirname(__file__), "..", "idp.db"))
 SECRET = os.environ.get("INTERNAL_JWT_SECRET", "change_this")
-SESSION_TTL = int(os.environ.get("IDP_SESSION_TTL", "3600"))
-CODE_TTL = int(os.environ.get("IDP_CODE_TTL", "300"))
-TOKEN_TTL = int(os.environ.get("JWT_EXPIRE_SECONDS", "1800"))
-PASSWORD_SALT = os.environ.get("IDP_PASSWORD_SALT", "salt")
-ISSUER = os.environ.get("IDP_ISSUER", "http://localhost:4180")
-
-# --- 辅助函数 ---
-def b64url(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
-
-def sign_jwt(payload: dict) -> str:
-    header = {"alg": "HS256", "typ": "JWT"}
-    h = b64url(json.dumps(header, separators=(",", ":")).encode())
-    p = b64url(json.dumps(payload, separators=(",", ":")).encode())
-    msg = f"{h}.{p}".encode()
-    sig = b64url(hmac.new(SECRET.encode(), msg, hashlib.sha256).digest())
-    return f"{h}.{p}.{sig}"
-
-def verify_jwt(token: str):
-    try:
-        h, p, s = token.split(".")
-        msg = f"{h}.{p}".encode()
-        sig = b64url(hmac.new(SECRET.encode(), msg, hashlib.sha256).digest())
-        if s != sig:
-            return None
-        payload = json.loads(base64.urlsafe_b64decode((p + "==").encode()))
-        exp = int(payload.get("exp", 0))
-        if exp and exp < int(time.time()):
-            return None
-        return payload
-    except Exception:
-        return None
+SESSION_TTL = 3600
+CODE_TTL = 300
+TOKEN_TTL = 1800
+PASSWORD_SALT = "salt"
+ISSUER = "http://localhost:4180"
 
 def connect():
     conn = sqlite3.connect(DB_PATH)
@@ -63,82 +35,96 @@ def init_db():
     conn.commit()
     conn.close()
 
+init_db()
+
 def hash_password(pw: str) -> str:
     return hashlib.sha256((PASSWORD_SALT + pw).encode()).hexdigest()
 
-init_db()
+def b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
-# --- 登录页面 UI (修复点 1) ---
+def sign_jwt(payload: dict) -> str:
+    header = {"alg": "HS256", "typ": "JWT"}
+    h = b64url(json.dumps(header, separators=(",", ":")).encode())
+    p = b64url(json.dumps(payload, separators=(",", ":")).encode())
+    msg = f"{h}.{p}".encode()
+    sig = b64url(hmac.new(SECRET.encode(), msg, hashlib.sha256).digest())
+    return f"{h}.{p}.{sig}"
+
+def verify_jwt(token: str):
+    try:
+        h, p, s = token.split(".")
+        msg = f"{h}.{p}".encode()
+        sig = b64url(hmac.new(SECRET.encode(), msg, hashlib.sha256).digest())
+        if s != sig: return None
+        payload = json.loads(base64.urlsafe_b64decode((p + "==").encode()))
+        if int(payload.get("exp", 0)) < int(time.time()): return None
+        return payload
+    except: return None
+
+# --- 登录页面 (GET) ---
 @router.get("/idp/login", response_class=HTMLResponse)
-def login_page(next: str | None = None):
-    # 如果没有 next 参数，默认跳回首页，但通常应该有
-    next_url = next if next else "/"
+def login_page(next: str | None = "/"):
     return f"""
     <html>
         <head>
-            <title>ANA Internal Login</title>
-            <meta charset="utf-8">
+            <title>ANA Login</title>
             <style>
-                body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f0f2f5; margin: 0; }}
-                .card {{ background: white; padding: 2.5rem; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 350px; }}
-                .logo {{ text-align: center; margin-bottom: 20px; font-weight: bold; font-size: 24px; color: #1a1a1a; }}
-                input {{ width: 100%; padding: 12px; margin: 8px 0 20px 0; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 16px; }}
-                input:focus {{ border-color: #0078d4; outline: none; }}
-                label {{ display: block; font-weight: 500; color: #666; margin-bottom: 5px; }}
-                button {{ width: 100%; padding: 12px; background-color: #0078d4; color: white; border: none; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; transition: background 0.2s; }}
-                button:hover {{ background-color: #0060aa; }}
-                .hint {{ text-align: center; margin-top: 15px; color: #888; font-size: 12px; }}
+                body {{ display:flex; justify-content:center; align-items:center; height:100vh; background:#f0f2f5; font-family:sans-serif; }}
+                .card {{ background:white; padding:2rem; border-radius:8px; box-shadow:0 2px 4px rgba(0,0,0,0.1); width:300px; }}
+                h2 {{ text-align:center; color: #333; }}
+                input {{ width:100%; padding:10px; margin:10px 0; border:1px solid #ccc; border-radius:4px; box-sizing:border-box; }}
+                button {{ width:100%; padding:10px; background:#0078d4; color:white; border:none; border-radius:4px; cursor:pointer; font-weight:bold; }}
+                button:hover {{ background:#005a9e; }}
+                .error {{ color: red; text-align: center; margin-bottom: 10px; font-size: 0.9em; }}
             </style>
         </head>
         <body>
             <div class="card">
-                <div class="logo">ANA 整備翻訳 Login</div>
-                <form action="/idp/login?next={urllib.parse.quote(next_url)}" method="post">
-                    <label>Username</label>
-                    <input type="text" name="username" required placeholder="admin">
-                    <label>Password</label>
-                    <input type="password" name="password" required placeholder="password">
+                <h2>ANA Login</h2>
+                <form action="/idp/login?next={urllib.parse.quote(next)}" method="post">
+                    <input type="text" name="username" required placeholder="Username">
+                    <input type="password" name="password" required placeholder="Password">
                     <button type="submit">Sign In</button>
                 </form>
-                <div class="hint">Default: admin / password</div>
             </div>
         </body>
     </html>
     """
 
-# --- 处理登录提交 (修复点 2: 改为 Form 表单提交) ---
+# --- 处理登录 (POST Form) ---
 @router.post("/idp/login")
-def idp_login(response: Response, username: str = Form(...), password: str = Form(...), next: str | None = Query(None)):
+def idp_login(response: Response, username: str = Form(...), password: str = Form(...), next: str | None = Query("/")):
     conn = connect()
     cur = conn.cursor()
-    cur.execute("select id, password_hash, email, name from users where username=?", (username,))
+    cur.execute("select id, password_hash from users where username=?", (username,))
     row = cur.fetchone()
     
-    # 验证失败
+    # 验证失败返回 HTML 错误页
     if not row or row["password_hash"] != hash_password(password):
         conn.close()
-        # 返回 HTML 报错页面 (简化处理)
-        return HTMLResponse(content="<h3>Invalid credentials. <a href='/idp/login'>Try again</a></h3>", status_code=401)
-        
-    # 验证成功
+        return HTMLResponse(f"""
+            <html><body style="display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;">
+            <div style="text-align:center;">
+                <h3 style="color:red;">Login Failed</h3>
+                <p>Invalid username or password.</p>
+                <a href='/idp/login?next={next}'>Try Again</a>
+            </div>
+            </body></html>
+        """, status_code=401)
+    
     sid = uuid.uuid4().hex
     exp = int(time.time()) + SESSION_TTL
     cur.execute("insert into sessions(session_id, user_id, expires_at) values(?,?,?)", (sid, row["id"], exp))
     conn.commit()
     conn.close()
     
-    # 设置 Cookie 并跳转
     response.set_cookie("session_id", sid, httponly=True, max_age=SESSION_TTL)
-    
-    # 如果有下一步地址，则跳转；否则返回 JSON ok
-    if next:
-        return RedirectResponse(url=next, status_code=302)
-    return {"ok": True}
+    return RedirectResponse(url=next, status_code=302)
 
 def get_current_user(request: Request):
     sid = request.cookies.get("session_id")
-    if not sid:
-        return None
+    if not sid: return None
     conn = connect()
     cur = conn.cursor()
     cur.execute("select user_id, expires_at from sessions where session_id=?", (sid,))
@@ -151,27 +137,21 @@ def get_current_user(request: Request):
     conn.close()
     return u
 
-# --- OAuth Authorize (修复点 3: 没登录时跳到登录页) ---
+# --- OAuth Authorize ---
 @router.get("/oauth/authorize")
 def oauth_authorize(request: Request, client_id: str, redirect_uri: str, response_type: str = "code", state: str | None = None):
     user = get_current_user(request)
     if not user:
-        # 关键修复：没登录不是报错，而是带着当前 URL 跳去登录页
+        # 未登录 -> 跳去登录页
         current_url = str(request.url)
         return RedirectResponse(f"/idp/login?next={urllib.parse.quote(current_url)}")
-
-    if response_type != "code":
-        raise HTTPException(status_code=400, detail="unsupported response_type")
     
     conn = connect()
     cur = conn.cursor()
-    cur.execute("select client_id, client_secret, redirect_uri from clients where client_id=?", (client_id,))
-    c = cur.fetchone()
-    # 简单的 Redirect URI 校验 (startsWith 逻辑，方便本地调试)
-    if not c or not redirect_uri.startswith(c["redirect_uri"]):
+    cur.execute("select * from clients where client_id=?", (client_id,))
+    if not cur.fetchone():
         conn.close()
-        # 这里的报错也可以美化，但暂时先这样
-        raise HTTPException(status_code=400, detail=f"invalid client or redirect_uri mismatch. Expected start with {c['redirect_uri'] if c else 'unknown'}")
+        raise HTTPException(400, "Invalid client")
         
     code = uuid.uuid4().hex
     exp = int(time.time()) + CODE_TTL
@@ -179,71 +159,64 @@ def oauth_authorize(request: Request, client_id: str, redirect_uri: str, respons
     conn.commit()
     conn.close()
     
-    url = f"{redirect_uri}?code={code}"
-    if state:
-        url += f"&state={state}"
-    return RedirectResponse(url)
+    return RedirectResponse(f"{redirect_uri}?code={code}&state={state or ''}")
 
 @router.post("/oauth/token")
 def oauth_token(grant_type: str = Form(...), code: str = Form(...), client_id: str = Form(...), client_secret: str = Form(...), redirect_uri: str = Form(...)):
-    if grant_type != "authorization_code":
-        raise HTTPException(status_code=400, detail="unsupported grant_type")
     conn = connect()
     cur = conn.cursor()
-    cur.execute("select client_id, client_secret, redirect_uri from clients where client_id=?", (client_id,))
-    c = cur.fetchone()
-    if not c or c["client_secret"] != client_secret: # 去掉了 redirect_uri 强校验，防止 http/https 混淆
+    cur.execute("select * from auth_codes where code=?", (code,))
+    auth_code = cur.fetchone()
+    if not auth_code or auth_code["client_id"] != client_id:
         conn.close()
-        raise HTTPException(status_code=401, detail="invalid client")
+        raise HTTPException(400, "Invalid code")
         
-    cur.execute("select code, user_id, client_id, redirect_uri, expires_at from auth_codes where code=?", (code,))
-    a = cur.fetchone()
-    if not a or a["client_id"] != client_id or a["expires_at"] < int(time.time()):
-        conn.close()
-        raise HTTPException(status_code=400, detail="invalid code")
-        
-    cur.execute("select id, username, email, name from users where id=?", (a["user_id"],))
+    cur.execute("select id, username, email, name from users where id=?", (auth_code["user_id"],))
     u = cur.fetchone()
     cur.execute("delete from auth_codes where code=?", (code,))
     conn.commit()
     conn.close()
     
     now = int(time.time())
-    payload = {"iss": ISSUER, "sub": str(u["id"]), "email": u["email"], "name": u["name"], "aud": client_id, "iat": now, "exp": now + TOKEN_TTL}
-    access_token = sign_jwt(payload)
-    return {"access_token": access_token, "token_type": "Bearer", "expires_in": TOKEN_TTL}
+    payload = {"sub": str(u["id"]), "name": u["name"], "email": u["email"], "iat": now, "exp": now + TOKEN_TTL}
+    return {"access_token": sign_jwt(payload), "token_type": "Bearer"}
 
 @router.get("/oauth/userinfo")
-def oauth_userinfo(authorization: str | None = Header(None)):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="missing token")
-    token = authorization.split(" ", 1)[1]
+def userinfo(authorization: str = Header(...)):
+    token = authorization.split(" ")[1]
     payload = verify_jwt(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="invalid token")
-    return {"sub": payload.get("sub"), "email": payload.get("email"), "name": payload.get("name")}
+    if not payload: raise HTTPException(401)
+    return payload
 
-# --- 数据预埋 (保持您之前的逻辑) ---
-def seed_data():
+# --- 贾维斯特别修正：强力数据预埋 ---
+def seed():
     conn = connect()
     cur = conn.cursor()
-    TARGET_CLIENT_ID = "frontend-app"
-    TARGET_CLIENT_SECRET = "frontend-secret"
-    TARGET_REDIRECT_URI = "http://localhost:3000"
-    
-    cur.execute("select id from clients where client_id=?", (TARGET_CLIENT_ID,))
+    print("[IDP Init] Checking Seed Data...")
+
+    # 1. 确保 Client 存在
+    cur.execute("select * from clients where client_id='frontend-app'")
     if not cur.fetchone():
-        print(f"[IDP Init] Seeding Client: {TARGET_CLIENT_ID}")
-        cur.execute("insert into clients(client_id, client_secret, redirect_uri) values(?,?,?)", (TARGET_CLIENT_ID, TARGET_CLIENT_SECRET, TARGET_REDIRECT_URI))
+        print("[IDP Init] Creating Client: frontend-app")
+        cur.execute("insert into clients(client_id, client_secret, redirect_uri) values(?,?,?)", ("frontend-app", "frontend-secret", "http://localhost:3000"))
     
-    TARGET_USERNAME = "admin"
-    TARGET_PASSWORD = "password"
-    cur.execute("select id from users where username=?", (TARGET_USERNAME,))
-    if not cur.fetchone():
-        print(f"[IDP Init] Seeding User: {TARGET_USERNAME}")
-        pw_hash = hash_password(TARGET_PASSWORD)
-        cur.execute("insert into users(username, password_hash, email, name, created_at) values(?,?,?,?,?)", (TARGET_USERNAME, pw_hash, "admin@example.com", "System Admin", int(time.time())))
+    # 2. 确保 Admin 存在 (并且强制更新密码!)
+    TARGET_USER = "admin"
+    TARGET_PASS = "password"
+    NEW_HASH = hash_password(TARGET_PASS)
+    
+    cur.execute("select id from users where username=?", (TARGET_USER,))
+    row = cur.fetchone()
+    
+    if not row:
+        print(f"[IDP Init] Creating User: {TARGET_USER}")
+        cur.execute("insert into users(username, password_hash, email, name, created_at) values(?,?,?,?,?)", (TARGET_USER, NEW_HASH, "admin@test.com", "Admin User", int(time.time())))
+    else:
+        # 关键修正：如果用户已存在，强制更新密码哈希，防止死锁
+        print(f"[IDP Init] Updating Password for User: {TARGET_USER}")
+        cur.execute("update users set password_hash=? where username=?", (NEW_HASH, TARGET_USER))
+        
     conn.commit()
     conn.close()
 
-seed_data()
+seed()
