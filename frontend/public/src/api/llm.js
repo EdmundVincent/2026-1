@@ -30,7 +30,10 @@ export class Llm {
   
   async requestTranslation(prompt, targetText='') {
     const backendUrl = this.getBackendUrl();
-    const resp = await fetch(`${backendUrl}/api/translate`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text: targetText, prompt }) });
+    const token = localStorage.getItem('internal_access_token');
+    const headers = { 'Content-Type':'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const resp = await fetch(`${backendUrl}/api/translate`, { method:'POST', headers, body: JSON.stringify({ text: targetText, prompt }) });
     if (!resp.ok) return null;
     const data = await resp.json();
   return data.translation || null;

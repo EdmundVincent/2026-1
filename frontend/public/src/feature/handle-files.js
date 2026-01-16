@@ -304,9 +304,13 @@ export class HandleFiles {
 			formData.append('file', file);
 			
 			// API呼び出し
+			const token = localStorage.getItem('internal_access_token');
+			const headers = {};
+			if (token) headers['Authorization'] = `Bearer ${token}`;
 			const response = await fetch(`${backendUrl}/api/upload-pdf`, {
 				method: 'POST',
-				body: formData
+				body: formData,
+				headers
 			});
 			
 			if (!response.ok) {

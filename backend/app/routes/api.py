@@ -26,6 +26,7 @@ from app.services.dx_suite_ocr import DXSuiteOCRService
 from app.services.blob_cache import BlobCacheService
 from app.services.config import config
 import logging
+from app.routes.idp import verify_jwt
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,16 @@ async def get_frontend_config():
         # "MAX_TOKENS": config.MAX_TOKENS,
     }
     return ConfigResponse(frontend_config=frontend_config)
+
+@router.get("/me")
+async def me(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing token")
+    token = authorization.split(" ", 1)[1]
+    payload = verify_jwt(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="invalid token")
+    return {"sub": payload.get("sub"), "email": payload.get("email"), "name": payload.get("name")}
 
 @router.post("/translate", response_model=TranslateResponse)
 async def translate(req: TranslateRequest):

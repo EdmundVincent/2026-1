@@ -1,110 +1,100 @@
-/**
- * WebApp EasyAuth機能を使用した認証管理
- */
 class AuthManager {
     constructor() {
         this.userInfo = null;
+        this.backendUrl = window.BACKEND_URL || 'http://localhost:8000';
+        this.clientId = 'demo-app';
+        this.clientSecret = 'demo-secret';
+        this.redirectUri = `${window.location.origin}/callback`;
+        this.stateKey = 'oauth_state';
+        this.tokenKey = 'internal_access_token';
         this.initializeAuth();
     }
-
-    /**
-     * 認証機能を初期化
-     */
     async initializeAuth() {
-        try {
-            await this.getUserInfo();
+        const token = this.getToken();
+        const code = this.getCodeFromUrl();
+        if (code) {
+            await this.exchangeCodeForToken(code);
+            this.clearCodeFromUrl();
+        }
+        const ok = await this.fetchUserInfoWithToken();
+        if (ok) {
             this.setupLogoutButton();
-        } catch (error) {
-            console.error('認証初期化エラー:', error);
-            this.showErrorMessage('認証情報の取得に失敗しました');
+            return;
         }
+        await this.loginFlow();
     }
-
-    /**
-     * EasyAuthからユーザー情報を取得
-     */
-    async getUserInfo() {
-        try {
-            const response = await fetch('/.auth/me');
-            
-            if (!response.ok) {
-                throw new Error(`認証情報の取得に失敗: ${response.status}`);
-            }
-
-            const authData = await response.json();
-            
-            if (authData && authData.length > 0 && authData[0].user_claims) {
-                this.userInfo = this.extractUserInfo(authData[0]);
-                this.displayUserInfo();
-            } else {
-                throw new Error('認証情報が見つかりません');
-            }
-        } catch (error) {
-            console.error('ユーザー情報取得エラー:', error);
-            // 開発環境用のフォールバック
-            if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-                this.userInfo = {
-                    name: 'Test User',
-                    email: 'test@example.com'
-                };
-                this.displayUserInfo();
-            } else {
-                throw error;
-            }
-        }
+    getToken() {
+        try { return localStorage.getItem(this.tokenKey) || null; } catch { return null; }
     }
-
-    /**
-     * EasyAuthのユーザークレームからユーザー情報を抽出
-     */
-    extractUserInfo(authInfo) {
-        const claims = authInfo.user_claims || [];
-        const userInfo = {
-            name: null,
-            email: null
-        };
-
-        // 一般的なクレームタイプからユーザー情報を抽出
-        claims.forEach(claim => {
-            switch (claim.typ) {
-                case 'name':
-                case 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name':
-                    userInfo.name = claim.val;
-                    break;
-                case 'email':
-                case 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress':
-                    userInfo.email = claim.val;
-                    break;
-                case 'preferred_username':
-                    if (!userInfo.name) {
-                        userInfo.name = claim.val;
-                    }
-                    break;
-            }
+    setToken(token) {
+        try { localStorage.setItem(this.tokenKey, token); } catch {}
+    }
+    getCodeFromUrl() {
+        const params = new URLSearchParams(window.location.search);
+        return params.get('code');
+    }
+    clearCodeFromUrl() {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('code');
+        url.searchParams.delete('state');
+        window.history.replaceState({}, document.title, url.toString());
+    }
+    async exchangeCodeForToken(code) {
+        const form = new URLSearchParams();
+        form.set('grant_type', 'authorization_code');
+        form.set('code', code);
+        form.set('client_id', this.clientId);
+        form.set('client_secret', this.clientSecret);
+        form.set('redirect_uri', this.redirectUri);
+        const resp = await fetch(`${this.backendUrl}/oauth/token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: form.toString()
         });
-
-        // 名前が取得できない場合はemailから抽出
-        if (!userInfo.name && userInfo.email) {
-            userInfo.name = userInfo.email.split('@')[0];
+        if (!resp.ok) { this.showErrorMessage('トークン取得に失敗しました'); return false; }
+        const data = await resp.json();
+        if (data && data.access_token) {
+            this.setToken(data.access_token);
+            return true;
         }
-
-        return userInfo;
+        return false;
     }
-
-    /**
-     * ユーザー情報をUIに表示
-     */
+    async fetchUserInfoWithToken() {
+        const token = this.getToken();
+        if (!token) return false;
+        const resp = await fetch(`${this.backendUrl}/api/me`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!resp.ok) return false;
+        const data = await resp.json();
+        this.userInfo = { name: data.name || null, email: data.email || null };
+        this.displayUserInfo();
+        this.setupLogoutButton();
+        return true;
+    }
+    async loginFlow() {
+        const username = window.prompt('ユーザー名を入力してください');
+        const password = window.prompt('パスワードを入力してください');
+        if (!username || !password) { this.showErrorMessage('ログインが必要です'); return; }
+        const resp = await fetch(`${this.backendUrl}/idp/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username, password }),
+            credentials: 'include'
+        });
+        if (!resp.ok) { this.showErrorMessage('ログインに失敗しました'); return; }
+        const state = Math.random().toString(36).slice(2);
+        try { localStorage.setItem(this.stateKey, state); } catch {}
+        const authUrl = `${this.backendUrl}/oauth/authorize?client_id=${encodeURIComponent(this.clientId)}&redirect_uri=${encodeURIComponent(this.redirectUri)}&response_type=code&state=${encodeURIComponent(state)}`;
+        window.location.href = authUrl;
+    }
     displayUserInfo() {
-        const userWelcomeElement = document.getElementById('userWelcome');
-        if (userWelcomeElement && this.userInfo) {
-            const displayName = this.userInfo.name || this.userInfo.email || 'ユーザー';
-            userWelcomeElement.textContent = `ユーザ名: ${displayName}`;
+        const el = document.getElementById('userWelcome');
+        if (el && this.userInfo) {
+            const name = this.userInfo.name || this.userInfo.email || 'ユーザー';
+            el.textContent = `ユーザ名: ${name}`;
         }
     }
-
-    /**
-     * ログアウトボタンのイベントを設定
-     */
     setupLogoutButton() {
         const logoutButton = document.getElementById('logoutButton');
         if (logoutButton) {
@@ -113,42 +103,20 @@ class AuthManager {
             });
         }
     }
-
-    /**
-     * ログアウト処理
-     */
     logout() {
-        // EasyAuthのログアウトエンドポイントにリダイレクト
-        // 本番環境では/.auth/logout?post_logout_redirect_uri=を使用
-        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-            // 開発環境用の模擬ログアウト
-            alert('ログアウトしました（開発環境）');
-            window.location.reload();
-        } else {
-            // 本番環境のEasyAuthログアウト
-            const logoutUrl = `/.auth/logout?post_logout_redirect_uri=${encodeURIComponent(window.location.origin)}`;
-            window.location.href = logoutUrl;
-        }
+        try { localStorage.removeItem(this.tokenKey); } catch {}
+        alert('ログアウトしました');
+        window.location.reload();
     }
-
-    /**
-     * エラーメッセージを表示
-     */
     showErrorMessage(message) {
-        const userWelcomeElement = document.getElementById('userWelcome');
-        if (userWelcomeElement) {
-            userWelcomeElement.textContent = message;
-            userWelcomeElement.style.color = '#dc3545';
+        const el = document.getElementById('userWelcome');
+        if (el) {
+            el.textContent = message;
+            el.style.color = '#dc3545';
         }
     }
-
-    /**
-     * 現在のユーザー情報を取得
-     */
     getCurrentUser() {
         return this.userInfo;
     }
 }
-
-// グローバルインスタンスとして認証マネージャーを作成
 window.authManager = new AuthManager();

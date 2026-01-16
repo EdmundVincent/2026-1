@@ -13,7 +13,9 @@ const getBackendUrl = () => {
 async function loadConfig() {
   try {
     const backendUrl = getBackendUrl();
-    const response = await fetch(`${backendUrl}/api/config`);
+    const token = localStorage.getItem('internal_access_token');
+    const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+    const response = await fetch(`${backendUrl}/api/config`, { headers });
     if (response.ok) {
       const data = await response.json();
       // サーバーから取得した設定でtranslationConfigを更新

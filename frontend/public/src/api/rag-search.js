@@ -33,7 +33,10 @@ export class RagSearch {
   
   async performRAGSearch(text){
     const backendUrl = this.getBackendUrl();
-    const resp = await fetch(`${backendUrl}/api/rag`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text })});
+    const token = localStorage.getItem('internal_access_token');
+    const headers = { 'Content-Type':'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const resp = await fetch(`${backendUrl}/api/rag`, { method:'POST', headers, body: JSON.stringify({ text })});
     if (!resp.ok) return null;
     return await resp.json();
   }

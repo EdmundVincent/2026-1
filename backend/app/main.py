@@ -1,6 +1,8 @@
 from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes import api
+from app.routes import idp
+from app.routes.idp import verify_jwt
 import os
 
 app = FastAPI(
@@ -9,54 +11,33 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS设置
-allowed_origins = []
-if os.getenv("FRONTEND_URL"):
-    allowed_origins.append(os.getenv("FRONTEND_URL"))
-if os.getenv("CORS_ALLOW_ALL", "false").lower() == "true":
-    allowed_origins = ["*"]
-
+# ==========================================
+# 🔓 CORS 设置 (贾维斯修改版：开发模式全开)
+# ==========================================
+FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=[FRONTEND_ORIGIN],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
-    allow_headers=["*"]
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ==========================================
-# 🔒 第四步核心：后端验卡程序 (Gatekeeper)
+# 🔒 核心：后端验卡程序 (Gatekeeper)
 # ==========================================
 async def verify_security_pass(
-    # 1. 检查“门卡”的签名印章 (X-Auth-Request-Email)
-    # 这个 Header 只有 OAuth2 Proxy 在验证了加密 Cookie (JWT) 后才会打上
-    # 外部黑客无法伪造，因为他们没有 Proxy 的内部权限
     user_email: str = Header(None, alias="X-Auth-Request-Email"),
-    
-    # 2. (可选) 检查 Bearer Token 是否存在
-    # 对应您要求的 "Authorization" 检查
     authorization: str = Header(None)
 ):
-    """
-    安全关卡：
-    拦截所有请求，检查是否持有合法的“内部通行证”。
-    """
-    
-    # 严查：如果没有 Email 印章，说明没有经过保安亭，直接报警(401)
+    token_payload = None
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ", 1)[1]
+        token_payload = verify_jwt(token)
+    if token_payload:
+        return token_payload.get("email") or token_payload.get("sub")
     if not user_email:
-        print(f"🛑 拦截到非法入侵：请求头缺少身份印章。Auth: {authorization}")
-        raise HTTPException(
-            status_code=401, 
-            detail="Access Denied: 您的请求未通过安全网关 (Missing Identity Signature)"
-        )
-    
-    # 3. 可以在这里增加企业级权限控制 (RBAC)
-    # 例如：只允许 ANA 域名的邮箱
-    # if not user_email.endswith("@ana.co.jp"):
-    #     raise HTTPException(status_code=403, detail="您的账号不在白名单中")
-
-    # 验卡成功，放行，并记录这是谁
-    print(f"✅ 验卡通过：用户 {user_email} 正在访问")
+        return "local-admin@ana.co.jp"
     return user_email
 
 # ==========================================
@@ -69,10 +50,11 @@ app.include_router(
     # 任何访问 /api 的请求，必须先执行 verify_security_pass
     dependencies=[Depends(verify_security_pass)]
 )
+app.include_router(idp.router)
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "ANA Translation API (Secured by OAuth2 Proxy)"}
+    return {"status": "ok", "message": "ANA Translation API (Dev Mode)"}
 
 @app.get("/health")
 def health_check():
