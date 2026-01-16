@@ -8,3 +8,11 @@ python-dotenv==1.0.1
 tenacity==8.5.0
 azure-storage-blob==12.19.0
 azure-identity==1.15.0
+
+# --- 数据库与认证核心依赖 ---
+sqlalchemy==2.0.30
+psycopg2-binary==2.9.9
+# 贾维斯修正：指定 bcrypt 版本以解决 passlib 的兼容性问题
+passlib==1.7.4
+bcrypt==4.0.1
+python-jose[cryptography]==3.3.0
